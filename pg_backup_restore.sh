@@ -37,26 +37,78 @@ if [[ "$MODE" == "1" ]]; then
 
     export PGPASSWORD
 
-    echo "⏳ Mengambil daftar tabel..."
-    TABLES=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -t -c "SELECT tablename FROM pg_tables WHERE schemaname='public';")
-    TABLE_COUNT=$(echo "$TABLES" | grep -c .)
-    if [[ $TABLE_COUNT -eq 0 ]]; then
-        echo "❌ Tidak ada tabel di database $PGDATABASE!"
+    echo "⏳ Mengambil daftar schema..."
+    SCHEMAS=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -t -c "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog', 'information_schema') ORDER BY schema_name;")
+    SCHEMA_COUNT=$(echo "$SCHEMAS" | grep -c .)
+    if [[ $SCHEMA_COUNT -eq 0 ]]; then
+        echo "❌ Tidak ada schema yang tersedia di database $PGDATABASE!"
         unset PGPASSWORD
         exit 1
     fi
 
-    echo "-- Backup struktur database" > "$BACKUP_PATH"
-    echo "1/3 (5%) Membackup struktur database..."
-    pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" --schema-only --no-owner --no-privileges --no-acl >> "$BACKUP_PATH"
+    echo "📋 Daftar schema yang tersedia:"
+    i=1
+    declare -a SCHEMA_ARRAY
+    for schema in $SCHEMAS; do
+        echo "$i) $schema"
+        SCHEMA_ARRAY[$i]="$schema"
+        i=$((i+1))
+    done
+
+    read -p "Pilih schema (masukkan nomor dipisah koma, misal 1,2,4): " SCHEMA_SELECTION
+    
+    # Parse schema selection
+    SELECTED_SCHEMAS=""
+    IFS=',' read -ra SCHEMA_NUMS <<< "$SCHEMA_SELECTION"
+    for num in "${SCHEMA_NUMS[@]}"; do
+        num=$(echo "$num" | tr -d ' ')  # Remove spaces
+        if [[ "$num" -gt 0 && "$num" -le ${#SCHEMA_ARRAY[@]} ]]; then
+            if [[ -n "$SELECTED_SCHEMAS" ]]; then
+                SELECTED_SCHEMAS="$SELECTED_SCHEMAS,'${SCHEMA_ARRAY[$num]}'"
+            else
+                SELECTED_SCHEMAS="'${SCHEMA_ARRAY[$num]}'"
+            fi
+        fi
+    done
+
+    if [[ -z "$SELECTED_SCHEMAS" ]]; then
+        echo "❌ Tidak ada schema yang valid dipilih!"
+        unset PGPASSWORD
+        exit 1
+    fi
+
+    echo "✅ Schema terpilih: $(echo "$SELECTED_SCHEMAS" | tr "'" " " | tr "," " ")"
+    
+    echo "⏳ Mengambil daftar tabel dari schema terpilih..."
+    TABLES_WITH_SCHEMA=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -t -c "SELECT schemaname || '.' || tablename FROM pg_tables WHERE schemaname IN ($SELECTED_SCHEMAS);")
+    TABLE_COUNT=$(echo "$TABLES_WITH_SCHEMA" | grep -c .)
+    if [[ $TABLE_COUNT -eq 0 ]]; then
+        echo "❌ Tidak ada tabel di schema yang dipilih!"
+        unset PGPASSWORD
+        exit 1
+    fi
+
+    echo "-- Backup struktur database untuk schema terpilih" > "$BACKUP_PATH"
+    echo "1/3 (5%) Membackup struktur database untuk schema terpilih..."
+    # Build schema list for pg_dump --schema parameters
+    SCHEMA_PARAMS=""
+    IFS=',' read -ra SCHEMA_LIST <<< "$SCHEMA_SELECTION"
+    for num in "${SCHEMA_LIST[@]}"; do
+        num=$(echo "$num" | tr -d ' ')
+        if [[ "$num" -gt 0 && "$num" -le ${#SCHEMA_ARRAY[@]} ]]; then
+            SCHEMA_PARAMS="$SCHEMA_PARAMS --schema=${SCHEMA_ARRAY[$num]}"
+        fi
+    done
+    # Execute pg_dump with schema parameters using eval to handle multiple arguments
+    eval "pg_dump -h \"$PGHOST\" -p \"$PGPORT\" -U \"$PGUSER\" -d \"$PGDATABASE\" $SCHEMA_PARAMS --schema-only --no-owner --no-privileges --no-acl" >> "$BACKUP_PATH"
 
     echo "-- Backup data per tabel" >> "$BACKUP_PATH"
     i=0
-    for tbl in $TABLES; do
+    for schema_table in $TABLES_WITH_SCHEMA; do
         i=$((i+1))
         percent=$(( (i*90/TABLE_COUNT) + 5 ))
-        echo "$i/$TABLE_COUNT ($percent%) Membackup tabel: $tbl"
-        pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" --data-only --table="$tbl" --no-owner --no-privileges --no-acl >> "$BACKUP_PATH"
+        echo "$i/$TABLE_COUNT ($percent%) Membackup tabel: $schema_table"
+        pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" --data-only --table="$schema_table" --no-owner --no-privileges --no-acl >> "$BACKUP_PATH"
     done
 
     echo "100% (3/3) Finalisasi backup..."
