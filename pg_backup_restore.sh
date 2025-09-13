@@ -28,10 +28,7 @@ if [[ "$MODE" == "1" ]]; then
     read -p "Path folder tujuan backup (default: ./backup): " BACKUP_DIR
     BACKUP_DIR=${BACKUP_DIR:-"./backup"}
 
-    # Membuat folder jika belum ada
     mkdir -p "$BACKUP_DIR"
-
-    # Nama file otomatis
     BACKUP_FILENAME="backup_${PGDATABASE}_$(date +%Y%m%d_%H%M).bak"
     BACKUP_PATH="${BACKUP_DIR%/}/$BACKUP_FILENAME"
 
@@ -40,9 +37,29 @@ if [[ "$MODE" == "1" ]]; then
 
     export PGPASSWORD
 
-    echo "⏳ Membackup database..."
-    pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
-        --no-owner --no-privileges --no-acl -F p -f "$BACKUP_PATH"
+    echo "⏳ Mengambil daftar tabel..."
+    TABLES=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -t -c "SELECT tablename FROM pg_tables WHERE schemaname='public';")
+    TABLE_COUNT=$(echo "$TABLES" | grep -c .)
+    if [[ $TABLE_COUNT -eq 0 ]]; then
+        echo "❌ Tidak ada tabel di database $PGDATABASE!"
+        unset PGPASSWORD
+        exit 1
+    fi
+
+    echo "-- Backup struktur database" > "$BACKUP_PATH"
+    echo "1/3 (5%) Membackup struktur database..."
+    pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" --schema-only --no-owner --no-privileges --no-acl >> "$BACKUP_PATH"
+
+    echo "-- Backup data per tabel" >> "$BACKUP_PATH"
+    i=0
+    for tbl in $TABLES; do
+        i=$((i+1))
+        percent=$(( (i*90/TABLE_COUNT) + 5 ))
+        echo "$i/$TABLE_COUNT ($percent%) Membackup tabel: $tbl"
+        pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" --data-only --table="$tbl" --no-owner --no-privileges --no-acl >> "$BACKUP_PATH"
+    done
+
+    echo "100% (3/3) Finalisasi backup..."
     unset PGPASSWORD
 
     if [[ $? -eq 0 ]]; then
@@ -52,7 +69,7 @@ if [[ "$MODE" == "1" ]]; then
     fi
 
 elif [[ "$MODE" == "2" ]]; then
-    # RESTORE MODE
+    # RESTORE MODE (belum ada progress detail)
     echo "=== ♻️  Mode Restore ==="
     read -p "Host tujuan (default: localhost): " PGHOST
     PGHOST=${PGHOST:-localhost}
@@ -68,11 +85,11 @@ elif [[ "$MODE" == "2" ]]; then
 
     export PGPASSWORD
 
-    # Pastikan database sudah ada
     echo "⚠️  Pastikan database tujuan ($PGDATABASE) sudah dibuat dan kosong!"
-
     echo "⏳ Melakukan restore database..."
+
     psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -f "$BACKUP_PATH"
+
     unset PGPASSWORD
 
     if [[ $? -eq 0 ]]; then
