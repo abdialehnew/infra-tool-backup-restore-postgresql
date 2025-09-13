@@ -25,8 +25,15 @@ if [[ "$MODE" == "1" ]]; then
     read -p "User (default: postgres): " PGUSER
     PGUSER=${PGUSER:-postgres}
     read -p "Nama Database: " PGDATABASE
-    read -p "Path file backup (default: ./backup_$(date +%Y%m%d_%H%M%S).sql): " BACKUP_PATH
-    BACKUP_PATH=${BACKUP_PATH:-"./backup_$(date +%Y%m%d_%H%M%S).sql"}
+    read -p "Path folder tujuan backup (default: ./backup): " BACKUP_DIR
+    BACKUP_DIR=${BACKUP_DIR:-"./backup"}
+
+    # Membuat folder jika belum ada
+    mkdir -p "$BACKUP_DIR"
+
+    # Nama file otomatis
+    BACKUP_FILENAME="backup_${PGDATABASE}_$(date +%Y%m%d_%H%M).bak"
+    BACKUP_PATH="${BACKUP_DIR%/}/$BACKUP_FILENAME"
 
     read -s -p "🔑 Password PostgreSQL untuk user $PGUSER: " PGPASSWORD
     echo
@@ -54,7 +61,7 @@ elif [[ "$MODE" == "2" ]]; then
     read -p "User tujuan (default: postgres): " PGUSER
     PGUSER=${PGUSER:-postgres}
     read -p "Nama Database tujuan: " PGDATABASE
-    read -p "Path file backup (.sql): " BACKUP_PATH
+    read -p "Path file backup (.bak/.sql): " BACKUP_PATH
 
     read -s -p "🔑 Password PostgreSQL untuk user $PGUSER: " PGPASSWORD
     echo
